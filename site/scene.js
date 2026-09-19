@@ -1,13 +1,14 @@
 /* The WayStation — placeholder scene.
  * A carriage travels a winding night road to a lamplit lodge while the story is told
- * in captions. Low-res pixel art (320x150, scaled up with nearest-neighbour), 2 fps.
+ * in captions. Pixel art on a 320x150 grid drawn at 2x (640x300), scaled up with
+ * nearest-neighbour, 2 fps.
  * No dependencies, no network calls. */
 (() => {
   'use strict';
 
   const W = 320, H = 150;
   const TICK_MS = 500;            // 2 fps
-  const TICKS_PER_CAPTION = 4;    // a new caption every 2 s
+  const TICKS_PER_CAPTION = 6;    // a new caption every 3 s
   const CAPTIONS = [
     'Historically, a waystation was never the destination.',
     'It was a place along the journey',
@@ -33,9 +34,12 @@
     'Everyone leaves on their own path.',
     'But for a little while, we share the journey.',
   ];
-  const JOURNEY = CAPTIONS.length * TICKS_PER_CAPTION;   // ticks until arrival
-  const REVEAL_AT = 16;                                    // ending tick that shows the story
-  const END_TICK = JOURNEY + 22;
+  // The captions and the scene finish together: the journey takes whatever the
+  // arrival sequence (ENDING ticks) leaves of the caption time.
+  const TOTAL = CAPTIONS.length * TICKS_PER_CAPTION;   // 138 ticks = 69 s
+  const ENDING = 26;                                    // arrive, embrace, go inside, door shuts
+  const JOURNEY = TOTAL - ENDING;
+  const DOOR_SHUT = 25;                                 // ending tick the door closes
 
   const C = {
     sky: ['#17120c', '#211a11', '#2d2317', '#3b2e1e', '#4d3b27', '#634c31'],
@@ -63,30 +67,40 @@
     h = Math.imul(h ^ (h >>> 13), 1274126177);
     return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
   };
-  const rect = (g, x, y, w, h, c) => { g.fillStyle = c; g.fillRect(Math.round(x), Math.round(y), Math.round(w), Math.round(h)); };
+  // Scene coordinates are 320x150; the canvas has RES device pixels per unit, so
+  // fine detail (stars, dithering, outlines, hatching) can use half-unit dots.
+  const RES = 2, D = 1 / RES;
+  const snap = (v) => Math.round(v * RES) / RES;
+  const rect = (g, x, y, w, h, c) => {
+    g.fillStyle = c;
+    g.fillRect(snap(x), snap(y), Math.max(D, snap(w)), Math.max(D, snap(h)));
+  };
   const px = (g, x, y, c) => rect(g, x, y, 1, 1, c);
+  const dot = (g, x, y, c) => rect(g, x, y, D, D, c);
   function ellipse(g, cx, cy, rx, ry, c) {
     g.fillStyle = c;
-    const r = Math.max(0.5, ry);
-    for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy++) {
+    const r = Math.max(D, ry);
+    for (let dy = -Math.ceil(r); dy <= Math.ceil(r); dy += D) {
       const k = 1 - (dy * dy) / (r * r);
       if (k < 0) continue;
       const hw = rx * Math.sqrt(k);
-      const x0 = Math.round(cx - hw), x1 = Math.round(cx + hw);
-      if (x1 >= x0) g.fillRect(x0, Math.round(cy + dy), x1 - x0 + 1, 1);
+      const x0 = snap(cx - hw), x1 = snap(cx + hw);
+      if (x1 >= x0) g.fillRect(x0, snap(cy + dy), x1 - x0 + D, D);
     }
   }
   function line(g, x0, y0, x1, y1, c) {
-    const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0));
-    for (let i = 0; i <= n; i++) px(g, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, c);
+    const n = Math.max(1, Math.ceil(Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0)) * RES));
+    for (let i = 0; i <= n; i++) dot(g, x0 + (x1 - x0) * i / n, y0 + (y1 - y0) * i / n, c);
   }
   function canvas(w, h) {
     const c = document.createElement('canvas');
-    c.width = w; c.height = h;
+    c.width = w * RES; c.height = h * RES;
     const g = c.getContext('2d');
+    g.setTransform(RES, 0, 0, RES, 0, 0);
     g.imageSmoothingEnabled = false;
     return [c, g];
   }
+  const rgb = (hex) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
 
   // ---------------------------------------------------------------- road path
   const HORIZON = 80, ARRIVE_Y = 133;
@@ -157,53 +171,57 @@
     const bayer = [[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9], [15, 7, 13, 5]];
 
     // Sky: posterised bands with ordered dithering, glowing toward the horizon.
-    for (let y = 0; y < HORIZON; y++) {
-      const level = (y / HORIZON) ** 1.4 * (C.sky.length - 1);
+    const sky = C.sky.map(rgb), sw = W * RES, sh = HORIZON * RES;
+    const img = g.createImageData(sw, sh);
+    for (let y = 0; y < sh; y++) {
+      const level = (y / sh) ** 1.4 * (sky.length - 1);
       const base = Math.floor(level), frac = level - base;
-      for (let x = 0; x < W; x++) {
+      for (let x = 0; x < sw; x++) {
         const hi = frac > bayer[y % 4][x % 4] / 16;
-        px(g, x, y, C.sky[Math.min(C.sky.length - 1, base + (hi ? 1 : 0))]);
+        const col = sky[Math.min(sky.length - 1, base + (hi ? 1 : 0))], o = (y * sw + x) * 4;
+        img.data[o] = col[0]; img.data[o + 1] = col[1]; img.data[o + 2] = col[2]; img.data[o + 3] = 255;
       }
     }
+    g.putImageData(img, 0, 0);
     // Stars
-    for (let i = 0; i < 55; i++) {
-      const x = Math.floor(rnd() * W), y = Math.floor(rnd() * 58);
+    for (let i = 0; i < 90; i++) {
+      const x = snap(rnd() * W), y = snap(rnd() * 58);
       if (Math.hypot(x - 78, y - 20) < 11) continue;
       STARS.push({ x, y, big: i < 5 });
-      px(g, x, y, C.starDim);
+      dot(g, x, y, C.starDim);
     }
     // Crescent moon
-    for (let dy = -7; dy <= 7; dy++) for (let dx = -7; dx <= 7; dx++) {
-      if (Math.hypot(dx, dy) <= 6.5 && Math.hypot(dx - 3, dy + 2) > 6) px(g, 78 + dx, 20 + dy, C.moon);
+    for (let dy = -7; dy <= 7; dy += D) for (let dx = -7; dx <= 7; dx += D) {
+      if (Math.hypot(dx, dy) <= 6.5 && Math.hypot(dx - 3, dy + 2) > 6) dot(g, 78 + dx, 20 + dy, C.moon);
     }
 
     // Far mountains, lit from the moon's side
     const far = [[0, 62], [20, 55], [38, 60], [60, 44], [80, 58], [100, 50], [118, 40], [135, 54], [150, 47],
       [170, 58], [190, 49], [215, 60], [240, 52], [265, 58], [290, 46], [320, 56]];
     let prev = ridge(far, 0);
-    for (let x = 0; x < W; x++) {
-      const y = Math.round(ridge(far, x));
-      rect(g, x, y, 1, HORIZON - y, C.mtnFar);
+    for (let x = 0; x < W; x += D) {
+      const y = snap(ridge(far, x));
+      rect(g, x, y, D, HORIZON - y, C.mtnFar);
       if (y <= prev) {                       // slope rising to the right: moonlit face
-        const len = 1 + Math.floor(rnd() * 5);
-        for (let k = 0; k < len; k++) if ((x + k) % 2 === 0 || k === 0) px(g, x, y + k, C.mtnFarHi);
+        const len = 1 + Math.floor(rnd() * 9);
+        for (let k = 0; k < len; k++) if (k % 2 === 0) dot(g, x, y + k * D, C.mtnFarHi);
       }
       prev = y;
     }
     const near = [[0, 70], [30, 66], [55, 71], [90, 67], [125, 74], [150, 70], [185, 66], [220, 72], [260, 68], [320, 71]];
-    for (let x = 0; x < W; x++) {
-      const y = Math.round(ridge(near, x));
-      rect(g, x, y, 1, HORIZON - y, C.mtnNear);
-      if (x % 3 === 0) px(g, x, y, C.mtnNearHi);
+    for (let x = 0; x < W; x += D) {
+      const y = snap(ridge(near, x));
+      rect(g, x, y, D, HORIZON - y, C.mtnNear);
+      if (Math.round(x * RES) % 3 === 0) dot(g, x, y, C.mtnNearHi);
     }
     // Distant pines on the horizon
     for (const [x, h] of [[44, 8], [50, 11], [56, 7], [150, 9], [157, 12], [163, 8], [205, 10], [212, 7]]) pine(g, x, HORIZON + 2, h, h * 0.6);
 
     // Ground
     rect(g, 0, HORIZON, W, H - HORIZON, C.ground);
-    for (let i = 0; i < 420; i++) {
-      const y = HORIZON + Math.floor(rnd() * (H - HORIZON));
-      px(g, Math.floor(rnd() * W), y, rnd() < 0.5 ? C.groundHi : C.pine);
+    for (let i = 0; i < 1400; i++) {
+      const y = HORIZON + rnd() * (H - HORIZON);
+      dot(g, rnd() * W, y, rnd() < 0.5 ? C.groundHi : C.pine);
     }
 
     // Road: perspective ellipse stamps along the path
@@ -213,8 +231,8 @@
     }
     for (let i = 0; i < ROAD.length; i += 2) {
       const [x, y] = ROAD[i], s = scaleAt(y), hw = 17 * s;
-      if (s > 0.4) { px(g, x - hw * 0.45, y, C.rut); px(g, x + hw * 0.45, y, C.rut); }
-      if (rnd() < 0.35) px(g, x + (rnd() - 0.5) * hw * 1.4, y + (rnd() - 0.5) * hw * 0.4, C.roadHi);
+      if (s > 0.3) { dot(g, x - hw * 0.45, y, C.rut); dot(g, x + hw * 0.45, y, C.rut); }
+      if (rnd() < 0.7) dot(g, x + (rnd() - 0.5) * hw * 1.4, y + (rnd() - 0.5) * hw * 0.4, C.roadHi);
     }
 
     // Pines behind the lodge
@@ -249,7 +267,7 @@
 
     // Engraving hatch
     g.fillStyle = 'rgba(0,0,0,0.13)';
-    for (let y = 0; y < H; y += 3) g.fillRect(0, y, W, 1);
+    for (let y = 0; y < H; y += 1.5) g.fillRect(0, y, W, D);
     return c;
   }
 
@@ -317,41 +335,56 @@
   }
 
   // ---------------------------------------------------------------- carriage sprite
-  const SPR_W = 52, SPR_H = 31, LAMP = [32, 10];
+  const SPR_W = 55, SPR_H = 31, LAMP = [32, 10];
   function wheel(g, cx, cy, r, frame) {
-    for (let dy = -r - 1; dy <= r + 1; dy++) for (let dx = -r - 1; dx <= r + 1; dx++) {
-      if (Math.abs(Math.hypot(dx, dy) - r) < 0.6) px(g, cx + dx, cy + dy, C.ink);
+    for (let dy = -r - 1; dy <= r + 1; dy += D) for (let dx = -r - 1; dx <= r + 1; dx += D) {
+      const d = Math.hypot(dx, dy);
+      if (Math.abs(d - r) < 0.45) dot(g, cx + 0.5 + dx, cy + 0.5 + dy, C.ink);
+      else if (Math.abs(d - r + 0.9) < 0.25) dot(g, cx + 0.5 + dx, cy + 0.5 + dy, C.woodDk);
     }
-    const spokes = frame ? [[1, 1], [1, -1]] : [[1, 0], [0, 1]];
-    for (const [ux, uy] of spokes) for (let k = -(r - 1); k <= r - 1; k++) {
+    const spokes = frame ? [[1, 1], [1, -1], [1, 0.4]] : [[1, 0], [0, 1], [0.4, 1]];
+    for (const [ux, uy] of spokes) {
       const n = Math.hypot(ux, uy);
-      px(g, cx + Math.round(ux / n * k), cy + Math.round(uy / n * k), C.woodHi);
+      for (let k = -(r - 1); k <= r - 1; k += D) dot(g, cx + 0.5 + ux / n * k, cy + 0.5 + uy / n * k, C.woodHi);
     }
     px(g, cx, cy, C.amberDim);
   }
   function buildCarriage(frame, passengers) {
     const [c, g] = canvas(SPR_W, SPR_H);
     // Horse — far-side legs darker
+    // Proportions: barrel y 17-24 (7 deep), legs y 24-30 (about the barrel's depth),
+    // a thick neck rising forward from the shoulder, and a head angled down.
+    const poly = (pts, col) => {
+      g.fillStyle = col;
+      g.beginPath(); g.moveTo(pts[0][0], pts[0][1]);
+      for (const [x, y] of pts.slice(1)) g.lineTo(x, y);
+      g.closePath(); g.fill();
+    };
     const legs = frame
-      ? [[38, 36, C.horseDk], [41, 42, C.horse], [46, 48, C.horseDk], [48, 46, C.horse]]
-      : [[38, 38, C.horseDk], [40, 40, C.horse], [46, 46, C.horseDk], [48, 48, C.horse]];
-    for (const [ux, lx, col] of legs) { rect(g, ux, 18, 1, 6, col); rect(g, lx, 24, 1, 6, col); px(g, lx, 30, C.ink); }
-    rect(g, 35, 12, 2, 1, C.horseDk);
-    rect(g, frame ? 34 : 35, 13, 1, 5, C.horseDk);
-    rect(g, 37, 12, 12, 6, C.horse);
-    rect(g, 38, 12, 10, 1, C.horseHi);
-    rect(g, 38, 17, 10, 1, C.horseDk);
-    rect(g, 49, 13, 1, 4, C.horse);
-    rect(g, 46, 8, 3, 5, C.horse);
-    rect(g, 47, 6, 3, 3, C.horse);
-    rect(g, 48, 4, 4, 3, C.horse);
-    rect(g, 51, 6, 1, 2, C.horseDk);
-    px(g, 48, 3, C.horseDk);
-    rect(g, 46, 5, 1, 7, C.horseDk);
-    px(g, 50, 5, C.ink);
-    rect(g, 45, 11, 1, 6, C.woodDk);        // collar
-    rect(g, 32, 16, 14, 1, C.woodDk);       // shafts
-    line(g, 36, 9, 48, 6, C.woodDk);        // reins
+      ? [[38, 37, C.horseDk], [41, 42, C.horse], [46, 47.5, C.horseDk], [48.5, 47, C.horse]]
+      : [[38, 38, C.horseDk], [40.5, 40.5, C.horse], [46, 46, C.horseDk], [48.5, 48.5, C.horse]];
+    for (const [ux, lx, col] of legs) {
+      rect(g, ux, 23, 1.5, 3.5, col);                      // forearm / gaskin
+      rect(g, lx, 26.5, 1, 3.5, col);                      // cannon
+      rect(g, lx - 0.5, 30, 2, 1, C.ink);                  // hoof
+    }
+    rect(g, 35.5, 17.5, 1.5, 1, C.horseDk);                // tail
+    rect(g, frame ? 34.5 : 35, 18.5, 1.5, 5, C.horseDk);
+    ellipse(g, 43, 20.5, 6.5, 3.5, C.horse);              // barrel
+    ellipse(g, 38.5, 20, 2.5, 3, C.horse);                // hindquarters
+    ellipse(g, 48, 20, 2.5, 3, C.horse);                  // chest
+    poly([[45.5, 19], [50, 19.5], [51.5, 13], [49.5, 10.5], [46.5, 13]], C.horse);           // neck
+    poly([[48.5, 11.5], [50.5, 9], [52, 9.5], [54, 13], [53, 14], [51, 12.5]], C.horse);   // head
+    rect(g, 52.5, 12.5, 1.5, 1.5, C.horseDk);             // muzzle
+    rect(g, 50, 7.5, 1, 2, C.horseDk);                    // ear
+    line(g, 46.5, 17, 49.5, 10, C.horseDk);               // mane
+    line(g, 47, 17, 50, 10, C.horseDk);
+    dot(g, 51.5, 10.5, C.ink);                            // eye
+    rect(g, 38, 17, 9, D, C.horseHi);                     // moonlit back
+    rect(g, 39, 23.5, 8, D, C.horseDk);                   // belly shadow
+    line(g, 46, 15.5, 48.5, 20, C.woodDk);                // collar
+    rect(g, 32, 20, 14, 1, C.woodDk);                     // shafts
+    line(g, 36, 9.5, 51, 11, C.woodDk);                   // reins
     // Cab
     rect(g, 7, 2, 10, 3, C.woodHi); rect(g, 11, 2, 1, 3, C.woodDk);
     rect(g, 2, 5, 30, 2, C.roof); rect(g, 3, 5, 28, 1, C.roofHi);
@@ -386,28 +419,30 @@
     r1: { coat: '#b39469', sleeve: '#94774f', hair: '#4a3420', apron: '#d8c29a' },
     r2: { coat: '#8a6d48', sleeve: '#6f5536', hair: '#d8c29a', skirt: true },
   };
-  // Waypoints in ending ticks: [tick, x, y]. Carriage stops at x=158.
+  // Waypoints in ending ticks: [tick, x, y]. Carriage stops at x=158. Each person
+  // goes in through the door at their last waypoint.
+  const HUG_TICKS = 4;                       // 2 s at 2 fps
+  const HUG_AT = { r1: 11, t1: 11, r2: 12, t2: 12 };
   const WALKS = {
-    r1: [[2, 244, 119], [4, 240, 126], [6, 231, 133], [9, 222, 136]],
-    r2: [[3, 248, 119], [5, 245, 126], [7, 239, 134], [10, 236, 138]],
-    t1: [[4, 160, 137], [11, 218, 136]],
-    t2: [[6, 154, 138], [12, 232, 138]],
+    r1: [[2, 244, 119], [4, 240, 126], [6, 231, 133], [9, 222, 136], [15, 222, 136], [17, 234, 129], [19, 240, 121], [20, 243, 118]],
+    t1: [[4, 160, 137], [11, 218, 136], [15, 218, 136], [17, 230, 130], [19, 237, 122], [21, 242, 118]],
+    r2: [[3, 248, 119], [5, 245, 126], [7, 239, 134], [10, 236, 138], [16, 236, 138], [18, 244, 129], [20, 247, 121], [22, 247, 118]],
+    t2: [[6, 154, 138], [12, 232, 138], [16, 232, 138], [18, 240, 130], [21, 245, 122], [23, 246, 118]],
   };
   const FACING = { r1: -1, r2: -1, t1: 1, t2: 1 };
-  const HUG_AT = { r1: 11, t1: 11, r2: 12, t2: 12 };
 
   function personAt(key, e) {
     const w = WALKS[key];
-    if (e < w[0][0]) return null;
+    if (e < w[0][0] || e >= w[w.length - 1][0]) return null;   // not out yet / gone inside
     for (let i = 1; i < w.length; i++) {
       if (e < w[i][0]) {
         const [t0, x0, y0] = w[i - 1], [t1, x1, y1] = w[i];
         const k = (e - t0) / (t1 - t0);
-        return { x: x0 + (x1 - x0) * k, y: y0 + (y1 - y0) * k, walking: true };
+        const dir = x1 > x0 ? 1 : x1 < x0 ? -1 : FACING[key];
+        return { x: x0 + (x1 - x0) * k, y: y0 + (y1 - y0) * k, walking: x1 !== x0 || y1 !== y0, dir };
       }
     }
-    const last = w[w.length - 1];
-    return { x: last[1], y: last[2], walking: false };
+    return null;
   }
   function drawPerson(g, p, x, y, dir, walking, phase, hugging) {
     x = Math.round(x); y = Math.round(y);
@@ -437,19 +472,19 @@
   // ---------------------------------------------------------------- frame
   let bg, sprites;
   function drawFrame(g, tick) {
-    g.drawImage(bg, 0, 0);
+    g.drawImage(bg, 0, 0, W, H);
     const e = tick - JOURNEY;            // ending tick (negative while travelling)
 
     // Twinkling stars
     for (let i = 0; i < STARS.length; i++) {
       const s = STARS[i], h = hash(i, tick);
-      if (h > 0.72) px(g, s.x, s.y, C.star);
+      if (h > 0.72) dot(g, s.x, s.y, C.star);
       if (s.big) {
-        px(g, s.x, s.y, C.star);
+        px(g, s.x - 0.5, s.y - 0.5, C.star);
         const r = h > 0.5 ? 2 : 1;
         g.fillStyle = 'rgba(243,226,189,0.55)';
-        g.fillRect(s.x - r, s.y, r * 2 + 1, 1);
-        g.fillRect(s.x, s.y - r, 1, r * 2 + 1);
+        g.fillRect(s.x - r, s.y, r * 2 + D, D);
+        g.fillRect(s.x, s.y - r, D, r * 2 + D);
       }
     }
     // Chimney smoke
@@ -470,7 +505,7 @@
     }
 
     // Open door and light spilling down the steps once the carriage has arrived
-    if (e >= 0) {
+    if (e >= 0 && e < DOOR_SHUT) {
       const [dx, dy, dw, dh] = DOOR;
       g.fillStyle = 'rgba(242,196,107,0.22)';
       g.beginPath(); g.moveTo(dx, dy + dh); g.lineTo(dx + dw, dy + dh); g.lineTo(dx + dw + 10, 131); g.lineTo(dx + dw + 6, 140); g.lineTo(dx - 30, 140); g.lineTo(dx - 16, 131); g.closePath(); g.fill();
@@ -484,8 +519,8 @@
     const pos = roadAt(u);
     if (Math.abs(pos.dx) > 0.3) facing = pos.dx < 0 ? -1 : 1;
     const s = scaleAt(pos.y);
-    const w = Math.max(3, Math.round(SPR_W * s)), h = Math.max(2, Math.round(SPR_H * s));
-    const x0 = Math.round(pos.x - w / 2), y0 = Math.round(pos.y - h);
+    const w = Math.max(3, snap(SPR_W * s)), h = Math.max(2, snap(SPR_H * s));
+    const x0 = snap(pos.x - w / 2), y0 = snap(pos.y - h);
     const passengers = e < 4 ? 2 : e < 6 ? 1 : 0;
     const spr = sprites[passengers][travelling ? tick % 2 : 0];
     g.save();
@@ -493,14 +528,14 @@
     else g.drawImage(spr, x0, y0, w, h);
     g.restore();
     const lampX = facing < 0 ? x0 + (SPR_W - LAMP[0]) * s : x0 + LAMP[0] * s;
-    px(g, lampX, y0 + LAMP[1] * s, flick ? C.amberHi : C.amber);
+    rect(g, lampX, y0 + LAMP[1] * s, Math.max(D, s), Math.max(D, s), flick ? C.amberHi : C.amber);
 
     // Arrival: travellers step down, residents come out, everyone embraces
     if (e >= 0) {
       const people = [];
       for (const key of ['r1', 'r2', 't1', 't2']) {
         const at = personAt(key, e);
-        if (at) people.push({ key, ...at, hug: e >= HUG_AT[key] });
+        if (at) people.push({ key, ...at, hug: e >= HUG_AT[key] && e < HUG_AT[key] + HUG_TICKS });
       }
       const hugging = people.filter((p) => p.hug);
       if (hugging.length) {
@@ -508,7 +543,7 @@
         ellipse(g, cx, 131, 22, 9, 'rgba(242,196,107,0.10)');
       }
       people.sort((a, b) => a.y - b.y);
-      for (const p of people) drawPerson(g, PEOPLE[p.key], p.x, p.y, FACING[p.key], p.walking, e % 2, p.hug);
+      for (const p of people) drawPerson(g, PEOPLE[p.key], p.x, p.y, p.hug ? FACING[p.key] : p.dir, p.walking, e % 2, p.hug);
       for (const p of people) if (p.hug) drawHugArms(g, PEOPLE[p.key], p.x, p.y, FACING[p.key]);
     }
   }
@@ -519,7 +554,9 @@
     const cv = document.getElementById('scene');
     if (!cv || !cv.getContext) return;
     document.documentElement.classList.replace('no-js', 'js');
+    cv.width = W * RES; cv.height = H * RES;
     const g = cv.getContext('2d');
+    g.setTransform(RES, 0, 0, RES, 0, 0);
     g.imageSmoothingEnabled = false;
     bg = buildBackground();
     sprites = [0, 1, 2].map((p) => [buildCarriage(0, p), buildCarriage(1, p)]);
@@ -546,7 +583,7 @@
     const render = () => {
       drawFrame(g, tick);
       setCaption(Math.min(CAPTIONS.length - 1, Math.floor(tick / TICKS_PER_CAPTION)));
-      if (tick - JOURNEY === REVEAL_AT) reveal(true);
+      if (tick === TOTAL) reveal(true);
     };
     const step = () => {
       render();
@@ -562,18 +599,18 @@
       facing = -1;
       for (let i = 0; i <= t; i += 2) drawFrame(g, i);   // keep carriage facing consistent
       render();
-      if (tick - JOURNEY >= REVEAL_AT) reveal(true);
+      if (tick >= TOTAL) reveal(true);
       tick++;
       play();
     };
 
     const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    skip.addEventListener('click', () => jumpTo(END_TICK - 2));
+    skip.addEventListener('click', () => jumpTo(TOTAL));
     replay.addEventListener('click', () => { reveal(false); shown = -1; jumpTo(0); });
     document.addEventListener('visibilitychange', () => (document.hidden ? stop() : play()));
 
     if (reduced) {
-      tick = END_TICK - 2;
+      tick = TOTAL;
       facing = -1;
       for (let i = 0; i <= tick; i += 2) drawFrame(g, i);
       render();
